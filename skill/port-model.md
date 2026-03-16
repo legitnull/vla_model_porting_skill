@@ -841,7 +841,33 @@ pip install {missing_packages}  # e.g. qwen-vl-utils, flash-attn
 
    If RNG states differ, check `set_seed()` implementation (torch, cuda, numpy, random) and ensure the same seed value is used. If weight sums differ for pretrained parameters, check checkpoint loading path and state_dict key mapping.
 
-6. **Compare against baseline**:
+6. **Verify `policy.train()` is called before the training loop** (see T12). `PreTrainedModel.from_pretrained()` calls `model.eval()` internally. If the training script doesn't call `policy.train()` afterwards, dropout is disabled and the model runs in eval mode during training.
+
+7. **Compare initial loss** with deterministic RNG:
+   - Set both sides to eval mode to eliminate dropout as a variable
+   - Add `torch.manual_seed(42); torch.cuda.manual_seed_all(42)` right before the forward call in both training scripts
+   - Run 1 step on each side — losses should match exactly (e.g., both 0.646)
+   - If losses match with fixed seed but differ without it, the divergence is purely from CUDA RNG state (see T13) — this is expected and harmless
+   - If losses differ even with fixed seed and eval mode, use hooks to find where (see step 8)
+
+8. **Use per-layer hooks to localize divergence** when losses don't match.
+   Use `{skill_repo}/scripts/hooks.py` — copy it into both training repos.
+
+   ```python
+   from hooks import DebugHooks
+   debug_hooks = DebugHooks(policy, print_fn=logger.info)
+   debug_hooks.register()
+   ```
+
+   This registers forward/backward hooks on all leaf modules. Each hook logs `[Rank N][FWD/BWD] module.name sum: value`. Run both sides and diff the logs line by line. The first line where sums diverge tells you exactly which module produces the mismatch.
+
+   Common divergence points:
+   - **Dropout layers** — diverge if train/eval mode differs or RNG state differs
+   - **Noise sampling** (`torch.randn`) — diverge if CUDA RNG state differs
+   - **Time/schedule sampling** (`Beta.sample()`) — same cause as noise
+   - **Attention mask handling** — check if the mask is actually used by the downstream module before investigating
+
+9. **Compare against baseline** (after fixing any issues from steps 6-8):
    - Loss at step 0 should be similar to source baseline
    - Loss curve should decrease at a similar rate
    - If loss diverges, check: dtype mismatches, preprocessing differences, action target slicing, noise sampling
@@ -1129,3 +1155,44 @@ accelerate launch -m lerobot.scripts.lerobot_train
 # Or just use python directly for single-GPU:
 python -m lerobot.scripts.lerobot_train
 ```
+
+### T12: Missing `policy.train()` after `from_pretrained()`
+
+**Symptom:** FlagScale training loss is lower than source baseline, and dropout layers produce identical input/output sums (no stochastic variation).
+
+**Cause:** `PreTrainedModel.from_pretrained()` calls `model.eval()` at the end of weight loading (transformers line ~5068 in v4, similar in v5). If the training script doesn't explicitly call `policy.train()` afterwards, the model stays in eval mode — all `nn.Dropout` modules pass through inputs unchanged, and `nn.BatchNorm` uses running stats instead of batch stats.
+
+This is easy to miss because:
+- The model still trains (gradients flow, weights update)
+- Loss still decreases
+- The only visible symptom is a slightly different loss value vs. the source baseline
+
+**Fix:** Add `policy.train()` after model creation and FSDP wrapping, before the training loop:
+```python
+policy = make_policy(config, ds_meta)
+apply_fsdp2(policy, device_mesh)
+optimizer, lr_scheduler = setup_optimizer_and_scheduler(policy, config)
+policy.train()  # Required — from_pretrained() leaves model in eval mode
+```
+
+**Verification:** Use per-layer hooks (A8 step 8) and compare dropout layer outputs. In train mode, `dropout.output` should differ between FlagScale and source (different RNG). In eval mode, they should match exactly.
+
+### T13: CUDA RNG divergence between frameworks
+
+**Symptom:** Losses differ between FlagScale and source even with identical model weights, data, and train/eval mode. Per-layer hooks show divergence at noise sampling or time sampling (e.g., `action_encoder.W1.input` for flow matching models). Adding `torch.manual_seed(42); torch.cuda.manual_seed_all(42)` right before the forward call makes losses match.
+
+**Cause:** The CUDA RNG state diverges between frameworks by the time the forward pass runs. Different framework initialization patterns consume different amounts of CUDA random numbers:
+- FSDP2 `fully_shard()` vs. Accelerator `prepare()`
+- `from_pretrained()` internals differ between transformers v4 and v5
+- Different model wrapping order and parameter materialization
+
+Any operation that calls `torch.randn()` or samples from CUDA distributions will produce different values.
+
+**Impact:** None for real training. Both models are mathematically equivalent — they just sample different noise on each step. The per-step loss values differ, but training converges to the same quality.
+
+**Verification:** To confirm parity despite RNG divergence:
+1. Set both sides to eval mode (eliminates dropout noise)
+2. Add fixed seed right before forward: `torch.manual_seed(42); torch.cuda.manual_seed_all(42)`
+3. Run 1 step — losses must match exactly
+4. If they do: RNG divergence is the sole cause, models are equivalent
+5. If they don't: there's a real computation difference — use hooks to find it
