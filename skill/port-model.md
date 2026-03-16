@@ -810,7 +810,35 @@ pip install {missing_packages}  # e.g. qwen-vl-utils, flash-attn
      --config-file examples/{model_name}/conf/train/{model_name}.yaml
    ```
 
-4. **Compare against baseline**:
+4. **Verify data pipeline parity** before comparing losses:
+   - Set `shuffle: false` and `train_steps: 1` in both source and FlagScale configs
+   - Add `torch.save(batch, "debug_raw_batch_{side}.pt")` before preprocessing and `torch.save(batch, "debug_preprocessed_batch_{side}.pt")` after preprocessing in both training scripts
+   - Run both sides for 1 step and compare tensors: `(a - b).abs().max()` for every key
+   - Raw batches should match exactly (max_diff=0.0) — if not, check dataset loading (video backend, delta_timestamps, sampler)
+   - Preprocessed batches should match exactly — if not, check normalization stats injection (see T11), preprocessor step ordering, or config differences
+   - Only proceed to loss comparison after data pipeline parity is confirmed
+
+5. **Verify RNG state and weight initialization** before comparing initial loss.
+   Use `{skill_repo}/scripts/diagnostics.py` — copy it into the project or add it to `PYTHONPATH`.
+
+   In both training scripts, add these calls:
+   ```python
+   from diagnostics import print_rng_state, print_weight_sums
+
+   # RIGHT BEFORE model creation — verify RNG state is identical
+   print_rng_state()
+
+   # RIGHT AFTER model creation / weight loading — verify weights match
+   print_weight_sums(model)
+   ```
+
+   Compare the log output between source and FlagScale:
+   - `print_rng_state()` outputs `torch_seed`, `torch_sum`, `cuda_seed`, `cuda_sum` — these must match exactly between source and FlagScale before model init
+   - `print_weight_sums()` outputs per-parameter weight sums — these must match for all pretrained parameters; randomly-initialized parameters may differ if RNG states diverge
+
+   If RNG states differ, check `set_seed()` implementation (torch, cuda, numpy, random) and ensure the same seed value is used. If weight sums differ for pretrained parameters, check checkpoint loading path and state_dict key mapping.
+
+6. **Compare against baseline**:
    - Loss at step 0 should be similar to source baseline
    - Loss curve should decrease at a similar rate
    - If loss diverges, check: dtype mismatches, preprocessing differences, action target slicing, noise sampling
@@ -1025,6 +1053,40 @@ but got attn_mask.dtype: long int and query.dtype: c10::BFloat16
 **Cause:** An attention mask from the VLM backbone (e.g., `backbone_attention_mask`) is `torch.long` (0/1 integers). When passed to `F.scaled_dot_product_attention`, it requires `bool`, `float`, or matching query dtype.
 
 **Fix:** Check the source repo to see if the mask is actually used in attention. In many cases (e.g., lerobot's GR00T), the mask is passed to the DiT's `forward()` signature but the DiT blocks receive `encoder_attention_mask=None` — the mask is effectively unused. Match the source behavior: if the source passes `None`, pass `None` from the caller rather than modifying shared attention code.
+
+### T11: Model-specific preprocessor step missing runtime overrides (normalization stats)
+
+**Symptom:** Preprocessed batch values differ between source and FlagScale even though raw batches are identical. Specifically, normalized fields (action, state) show max_diff > 0 while non-normalized fields (eagle_pixel_values, input_ids, attention_mask) match exactly. Padded dimensions (zeros) also match — only the real data dimensions differ.
+
+**Cause:** Model-specific preprocessor steps (e.g., `groot_pack_inputs`) may accept optional runtime parameters like `stats: dict | None = None` for min-max normalization. These stats come from `dataset.meta.stats` and must be injected at runtime via `preprocessor_overrides` — they are NOT part of the YAML config (which only has static parameters like `normalize_min_max: true`).
+
+In the training script, the `preprocessor_overrides` dict may only pass stats to generic steps (e.g., `normalizer_processor`, `device_processor`) but forget the model-specific step. The model-specific step then runs with `stats=None` and skips normalization entirely (e.g., `if self.stats is None: return x`).
+
+In lerobot, this is handled in `make_pre_post_processors()` which explicitly overrides `groot_pack_inputs_v3` with `{"stats": dataset_stats, "normalize_min_max": True}`.
+
+**Fix:** Add the model-specific step to `preprocessor_overrides` in the training script:
+```python
+preprocessor_overrides = {
+    "device_processor": {"device": device.type},
+    "normalizer_processor": {"stats": dataset.meta.stats, ...},
+    # Model-specific step needs stats too!
+    "groot_pack_inputs": {
+        "stats": dataset.meta.stats,
+        "normalize_min_max": True,
+    },
+}
+```
+Similarly for the postprocessor if it has an inverse normalization step:
+```python
+postprocessor_overrides = {
+    "groot_action_unpack_unnormalize": {
+        "stats": dataset.meta.stats,
+        "normalize_min_max": True,
+    },
+}
+```
+
+**Verification:** Dump preprocessed batches from both source and FlagScale (`torch.save`) with `shuffle=False` and `train_steps=1`, then compare all tensor keys with `(a - b).abs().max()`. All keys should show max_diff=0.0.
 
 ### T6: torchcodec fails with missing FFmpeg libraries
 
