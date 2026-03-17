@@ -872,6 +872,32 @@ pip install {missing_packages}  # e.g. qwen-vl-utils, flash-attn
    - Loss curve should decrease at a similar rate
    - If loss diverges, check: dtype mismatches, preprocessing differences, action target slicing, noise sampling
 
+10. **Multi-step loss comparison** — run both sides for 100 steps with `log_freq=1` and compare rank-by-rank.
+
+    a. Run both source and FlagScale for 100 steps, capturing all-rank logs to files:
+       - Ensure `log_freq=1` so every step is logged
+       - Redirect stdout/stderr to log files (e.g., `/tmp/fs_100step.log`, `/tmp/source_100step.log`)
+       - For multi-GPU, ensure each rank's loss is logged with a rank identifier (e.g., `[Rank 0] step:1 ... loss:0.644`)
+
+    b. Plot the comparison using `{skill_repo}/scripts/plot_loss_comparison.py`:
+       ```bash
+       python {skill_repo}/scripts/plot_loss_comparison.py \
+         /tmp/fs_100step.log /tmp/source_100step.log \
+         -o /tmp/loss_plots -l1 "FlagScale" -l2 "Source" \
+         -p '<fs_log_pattern>' -p '<source_log_pattern>'
+       ```
+       Each `-p` pattern is a regex with 3 capture groups: `(rank, step, loss)`.
+       The script aligns by actual step number (handles missing log lines from interleaved output).
+       It generates two types of plots per rank:
+       - **Loss comparison** — overlaid loss curves from both sides
+       - **Relative/absolute diff** — difference at each step with statistics (mean, std, max)
+
+    c. Interpret the results:
+       - **Mean abs diff < 0.01** and **no monotonic accumulation** → bf16 numerical noise, port is correct
+       - Divergence spikes that correlate with grad_norm spikes are expected (flash attention / cuDNN bf16 non-determinism)
+       - If diff grows monotonically or exceeds 0.05 consistently, investigate: LR schedule mismatch, weight decay diff, grad clipping diff, optimizer state divergence
+       - Save the plots to the report directory
+
 ---
 
 ## Track B: Inference
@@ -1042,6 +1068,7 @@ if stale.exists():
     shutil.rmtree(stale)
 ```
 4. Pass `local_files_only=True` to `from_pretrained` to prevent downloading from HF hub.
+5. After patching vendored files, **delete `__pycache__/` directories** at every level of the cache chain. Stale `.pyc` files will be loaded instead of the patched `.py` source. Either delete manually or add `shutil.rmtree(pycache)` in the cache refresh logic.
 
 ### T8: Vendored HF model code incompatible with FlagScale's transformers version
 
@@ -1196,3 +1223,45 @@ Any operation that calls `torch.randn()` or samples from CUDA distributions will
 3. Run 1 step — losses must match exactly
 4. If they do: RNG divergence is the sole cause, models are equivalent
 5. If they don't: there's a real computation difference — use hooks to find it
+
+### T14: `return_tensors` conflict with `DefaultFastImageProcessorKwargs` fallback
+
+**Symptom:**
+```
+TypeError: got multiple values for argument 'return_tensors'
+```
+when calling `self.image_processor(images=..., return_tensors="pt")`.
+
+**Cause:** After applying the T8 fix (`DefaultFastImageProcessorKwargs as ImagesKwargs`), the base class's `preprocess()` method reads `return_tensors` from the kwargs dataclass. If the caller also passes `return_tensors="pt"` as an explicit keyword argument, it conflicts.
+
+**Fix:** Remove the explicit `return_tensors="pt"` from the caller (e.g., `processing_eagle2_5_vl.py`). The `DefaultFastImageProcessorKwargs` already provides a `return_tensors` field. If the default is wrong, set it in the kwargs dataclass or pass it via `data_format` config, not as a positional override.
+
+### T15: Multi-GPU race condition on dynamic module loading
+
+**Symptom:** Intermittent `ModuleNotFoundError`, `SyntaxError`, or corrupted `.py` files when running multi-GPU training with `trust_remote_code=True` processors.
+
+**Cause:** Multiple ranks call `AutoProcessor.from_pretrained(trust_remote_code=True)` simultaneously. This triggers `get_class_from_dynamic_module()` which writes to the shared `$HF_HOME/modules/transformers_modules/` directory. Concurrent writes from multiple ranks corrupt files.
+
+**Fix:** Guard processor/model loading with a distributed barrier:
+```python
+if dist.is_initialized() and dist.get_rank() != 0:
+    dist.barrier()  # Non-rank-0 processes wait
+
+processor = AutoProcessor.from_pretrained(cache_dir, trust_remote_code=True)
+
+if dist.is_initialized() and dist.get_rank() == 0:
+    dist.barrier()  # Rank 0 signals it's done
+```
+Rank 0 loads first (populating the cache), then the barrier lets other ranks load from the already-cached files.
+
+### T16: Source repo's `pretrained_path` vs `base_model_path` confusion
+
+**Symptom:** `ProcessorMigrationError: policy_preprocessor.json not found` or similar errors when launching source repo training.
+
+**Cause:** Source repos (e.g., lerobot) may have two config fields for model paths:
+- `pretrained_path` — used by the **factory/preprocessor loading** code (`make_pre_post_processors`) to find processor JSON config files. Setting this to a base model checkpoint (which has no processor JSON) triggers migration errors.
+- `base_model_path` — used by the **model class `__init__`** to load weights.
+
+Passing `--policy.pretrained_path=/path/to/model` when the model checkpoint doesn't contain processor config files will fail.
+
+**Fix:** Use `--policy.base_model_path=/path/to/model` and do NOT set `pretrained_path`. The model class loads weights via `base_model_path`; `pretrained_path` is only for loading previously-saved fine-tuned policies that include processor configs. Also pass `--policy.push_to_hub=false` to avoid HF Hub auth errors.
