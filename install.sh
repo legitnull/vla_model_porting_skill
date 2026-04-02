@@ -16,8 +16,9 @@ if [ ! -d "$TARGET" ]; then
     exit 1
 fi
 
-SKILLS_DIR="$TARGET/.claude/skills"
-mkdir -p "$SKILLS_DIR"
-cp "$SCRIPT_DIR/skill/port-model.md" "$SKILLS_DIR/"
+SKILLS_DIR="$TARGET/.claude/skills/port-model-flagscale"
+mkdir -p "$SKILLS_DIR/scripts"
+cp "$SCRIPT_DIR/skills/port-model-flagscale/SKILL.md" "$SKILLS_DIR/"
+cp "$SCRIPT_DIR/skills/port-model-flagscale/scripts/"*.py "$SKILLS_DIR/scripts/"
 
-echo "Installed port-model skill to $SKILLS_DIR/port-model.md"
+echo "Installed port-model-flagscale skill to $SKILLS_DIR/"

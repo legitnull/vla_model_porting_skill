@@ -28,8 +28,9 @@ Copy the skill file into your FlagScale project's `.claude/skills/` directory:
 Or manually:
 
 ```bash
-mkdir -p /path/to/your/FlagScale/.claude/skills
-cp skill/port-model.md /path/to/your/FlagScale/.claude/skills/
+mkdir -p /path/to/your/FlagScale/.claude/skills/port-model-flagscale/scripts
+cp skills/port-model-flagscale/SKILL.md /path/to/your/FlagScale/.claude/skills/port-model-flagscale/
+cp skills/port-model-flagscale/scripts/*.py /path/to/your/FlagScale/.claude/skills/port-model-flagscale/scripts/
 ```
 
 ## Usage

@@ -1,0 +1,12 @@
+{
+  "name": "vla-model-porting-skill",
+  "skills": "skills",
+  "description": "Agent skill for porting VLA (Vision-Language-Action) models from external repos into FlagScale. Covers source analysis, environment setup, model class creation, training entrypoint, config YAML, and parity validation.",
+  "version": "1.0.0",
+  "author": {
+    "name": "fengyupu"
+  },
+  "repository": "https://github.com/fengyupu/vla_model_porting_skill",
+  "license": "Apache-2.0",
+  "keywords": ["vla", "model-porting", "flagscale", "training", "megatron", "fsdp"]
+}
