@@ -4,7 +4,7 @@ Every step in this skill must be logged. At the start of each step, append to th
 
 Report directory: `{workspace}/reports/{model_name}_port/`
 
-The `{workspace}` is the directory where you cloned the source repo and FlagScale (e.g. `/share/project/fengyupu/cc_workspace/`).
+The `{workspace}` is the directory where you cloned the source repo and FlagScale (e.g. the current working directory).
 
 Each step writes its own report file named `{date}_{step_name}.md` (e.g. `2025-03-01_source_analysis.md`, `2025-03-01_env_setup.md`, `2025-03-01_training_port.md`).
 

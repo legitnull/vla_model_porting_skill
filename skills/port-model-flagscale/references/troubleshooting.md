@@ -301,3 +301,20 @@ Rank 0 loads first (populating the cache), then the barrier lets other ranks loa
 Passing `--policy.pretrained_path=/path/to/model` when the model checkpoint doesn't contain processor config files will fail.
 
 **Fix:** Use `--policy.base_model_path=/path/to/model` and do NOT set `pretrained_path`. The model class loads weights via `base_model_path`; `pretrained_path` is only for loading previously-saved fine-tuned policies that include processor configs. Also pass `--policy.push_to_hub=false` to avoid HF Hub auth errors.
+
+### T17: Source model requires a different transformers version than FlagScale
+
+**Symptom:** Source model code uses APIs that don't exist, have different signatures, or behave differently under FlagScale's installed `transformers` version. Examples:
+- `ImportError` or `AttributeError` on model/processor classes that were renamed or moved
+- Different default return types (e.g., lists vs tensors — see T4)
+- Missing or extra arguments in `from_pretrained()`, processor calls, or config constructors
+- Meta-device initialization failures (see T2, T3)
+
+**Cause:** The source model was written for a different `transformers` version than what FlagScale pins. FlagScale's version must not be changed.
+
+**Fix:** Adapt the ported code, never the environment. Strategies:
+1. Check FlagScale's `transformers` version (`python -c "import transformers; print(transformers.__version__)"`) and read the transformers changelog for breaking changes between the source version and FlagScale's version.
+2. Replace deprecated/removed API calls with their equivalents in FlagScale's version.
+3. If the source model vendors HuggingFace model files (e.g., `modeling_*.py`, `configuration_*.py`), update those vendored copies to be compatible with FlagScale's transformers version.
+4. See T2 (meta tensor `.item()`), T3 (`post_init()`), T4 (image processor return types), T8 (fast image processor kwargs) for the most common transformers 5.x adaptation patterns.
+5. When installing source model dependencies into the FlagScale env, use `pip install --no-deps` to prevent transitive dependency upgrades, then verify `transformers` version is unchanged.

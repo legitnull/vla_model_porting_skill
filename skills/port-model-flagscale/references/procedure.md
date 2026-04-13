@@ -1,12 +1,3 @@
-## Step 1: Gather inputs
-
-Ask the user:
-
-1. **Source repo path** — the local path to the repo containing the model to port
-2. **Target model** — which model/class in that repo they want to port
-
-Do not proceed until you have both answers.
-
 ## Step 2: Understand the source model
 
 Report file for this step: `{date}_source_analysis.md`
@@ -135,7 +126,7 @@ Extract:
 
 ### 3d: Ask user for conda env location
 
-Ask the user where to place the new conda environment. Default suggestion: alongside their other envs (e.g. `/share/project/fengyupu/conda_envs/`).
+Ask the user where to place the new conda environment.
 
 The env name should be: `cc_port_model_{source_repo_name}` (e.g. `cc_port_model_starVLA`). One env per source repo — all models in the same repo share the same env.
 
@@ -349,6 +340,12 @@ cd {workspace}/FlagScale
 pip install -e .
 ```
 
+**IMPORTANT: Record the installed `transformers` version immediately after setup:**
+```bash
+python -c "import transformers; print(transformers.__version__)"
+```
+This is FlagScale's pinned version. Do not change it at any point during the porting process. All ported code must be adapted to work with this version.
+
 ### 4c: Verify FlagScale imports
 
 ```bash
@@ -506,6 +503,7 @@ When porting code from the source repo, follow these rules:
 - **Do not add unnecessary comments** explaining what you changed. The attribution header and git diff are sufficient.
 - **State dict key compatibility:** When porting a model that loads pretrained weights via `from_pretrained()`, ensure that attribute names on your ported classes match the pretrained checkpoint's state dict keys exactly. For example, if the checkpoint has keys `backbone.eagle_model.vision_model.*`, the ported class must have `self.backbone.eagle_model.vision_model` with those exact names. Renaming attributes will break weight loading.
 - **Reuse shared building blocks** from FlagScale rather than duplicating code. Before creating a new module, check if equivalent implementations already exist in `vla/action_model/`, `vla/vlm/`, or `flagscale/models/`. Import from the shared location and only define new classes when the existing ones are insufficient.
+- **Do not change FlagScale's transformers version.** FlagScale pins a specific `transformers` version. Never downgrade or upgrade it to satisfy the source model's requirements. Instead, adapt the ported code to work with FlagScale's installed version. If the source model uses APIs that changed between versions (e.g., deprecated arguments, renamed classes, different return types), update the ported code to use the FlagScale-compatible API. See Troubleshooting T2–T4 for common transformers 5.x adaptation patterns.
 
 ### A3: Port or register sub-components
 
@@ -755,6 +753,17 @@ The FlagScale env may need additional packages from the source model. Install th
 conda activate {flagscale_env}
 pip install {missing_packages}  # e.g. qwen-vl-utils, flash-attn
 ```
+
+**Do not install a different `transformers` version.** If a source dependency tries to pull in a different transformers (e.g., via its own `requirements.txt` or as a transitive dep), use `--no-deps` and install only the specific missing packages. After installing, verify the version hasn't changed:
+```bash
+python -c "import transformers; print(transformers.__version__)"
+```
+
+**Track every new package.** Record each newly installed package (name and version) in the report. After the port is validated, add them to FlagScale's requirements file so that future installs include them automatically. Find the correct requirements file:
+```bash
+ls {workspace}/FlagScale/requirements*.txt {workspace}/FlagScale/setup.py {workspace}/FlagScale/setup.cfg {workspace}/FlagScale/pyproject.toml
+```
+Add the new packages with version pins (e.g., `qwen-vl-utils>=0.0.8`) to the appropriate section. If FlagScale uses optional dependency groups (e.g., `[vla]` extras), add them there rather than to the base requirements.
 
 ### A8: Validate training
 

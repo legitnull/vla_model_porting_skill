@@ -17,8 +17,9 @@ if [ ! -d "$TARGET" ]; then
 fi
 
 SKILLS_DIR="$TARGET/.claude/skills/port-model-flagscale"
-mkdir -p "$SKILLS_DIR/scripts"
+mkdir -p "$SKILLS_DIR/scripts" "$SKILLS_DIR/references"
 cp "$SCRIPT_DIR/skills/port-model-flagscale/SKILL.md" "$SKILLS_DIR/"
 cp "$SCRIPT_DIR/skills/port-model-flagscale/scripts/"*.py "$SKILLS_DIR/scripts/"
+cp "$SCRIPT_DIR/skills/port-model-flagscale/references/"*.md "$SKILLS_DIR/references/"
 
 echo "Installed port-model-flagscale skill to $SKILLS_DIR/"

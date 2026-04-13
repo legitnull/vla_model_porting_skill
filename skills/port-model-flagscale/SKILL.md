@@ -22,18 +22,40 @@ allowed-tools: "Bash(python:*) Bash(python3:*) Bash(git:*) Bash(pip:*) Bash(ls:*
 You are helping the user port a model from an external repo into FlagScale.
 Follow each step below in order. Do not skip steps.
 
-## References
+## Execution
 
-Read these files (relative to this SKILL.md) before starting:
+### Step 1: Gather inputs
+
+Ask the user for:
+- **Source repo path** — the local path to the repo containing the model to port
+- **Target model** — which model/class in that repo they want to port
+
+Do not proceed until you have both answers.
+
+**→ Tell user**: Confirm the source repo path and target model name.
+
+### Step 2: Load references
+
+Read these files (relative to this SKILL.md):
 - `references/reporting.md` — logging discipline (log-before-you-act rule)
-- `references/procedure.md` — step-by-step porting procedure (Steps 1–5, Tracks A/B/C)
+- `references/procedure.md` — step-by-step porting procedure (Steps 2–5, Tracks A/B/C)
 - `references/troubleshooting.md` — known issues and fixes (T1–T16)
+
+Internalize the reporting rules. You MUST follow the log-before-you-act discipline from `reporting.md` for every action from this point forward.
 
 The procedure references executable scripts in `scripts/`:
 - `scripts/diagnostics.py` — environment and dependency diagnostics
 - `scripts/download_hf.py` — download HuggingFace models/datasets
 - `scripts/hooks.py` — debug hooks for tracing model execution
 - `scripts/plot_loss_comparison.py` — compare loss curves between source and ported model
+
+**→ Tell user**: "References loaded. Starting source analysis."
+
+### Step 3: Execute procedure
+
+With inputs gathered, execute every step in `procedure.md` sequentially, starting from Step 2 (source analysis). Follow the reporting rules throughout. When you hit an error, consult `troubleshooting.md` for known fixes before debugging from scratch.
+
+**→ Tell user**: Before starting, output a numbered plan of all steps. Report progress at each step boundary.
 
 ## Overview
 
@@ -47,12 +69,6 @@ The procedure references executable scripts in `scripts/`:
 | Training port | Track A (A1–A8) | Port model class, create entrypoint + config, validate training |
 | Inference port | Track B (B1–B4) | Port inference path, validate predictions |
 | Serving port | Track C (C1–C3) | Create serving endpoint, validate end-to-end |
-
-## Execution
-
-1. Read `references/reporting.md` — internalize the logging rules
-2. Read `references/procedure.md` — follow Steps 1 through 5, then the applicable Tracks
-3. When you hit an error during any step, consult `references/troubleshooting.md`
 
 ## Examples
 
@@ -93,3 +109,4 @@ See `references/troubleshooting.md` for the full catalog (T1–T16). Common issu
 | FlagScale env issues | T9, T10 |
 | Training parity issues | T11, T12, T13 |
 | Multi-GPU race conditions | T15 |
+| Source model needs different transformers version | T17 |

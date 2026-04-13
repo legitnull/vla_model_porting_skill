@@ -215,7 +215,7 @@ Note: For private repositories, set HF_TOKEN environment variable:
     args = parser.parse_args()
 
     if not args.output_dir:
-        args.output_dir = f"/share/project/fengyupu/{args.repo_type}s"
+        args.output_dir = os.path.join(os.getcwd(), f"hf_{args.repo_type}s")
         print(f"Using default output dir: {args.output_dir}")
 
     output_dir = Path(args.output_dir).expanduser().resolve()
